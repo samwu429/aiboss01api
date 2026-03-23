@@ -7,16 +7,18 @@ from pydantic import BaseModel
 import PyPDF2
 import uvicorn
 
-# 1. 配置核心引擎
+# ==========================================
+# 1. 核心配置与初始化
+# ==========================================
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# 使用 Gemini 1.5 Flash
+# 【核心更新】使用 Gemini 2.5 Flash 模型，火力全开
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = FastAPI()
 
-# 2. 究极跨域配置
+# 究极跨域配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,13 +26,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Render 健康检查
+# Render 健康检查 (必须保留)
 @app.get("/")
 def read_root():
-    return {"status": "Live", "message": "AI Boss Universal Engine is active."}
+    return {"status": "Live", "engine": "Gemini 2.5 Flash", "version": "U-OS 3.0"}
+
 
 # ==========================================
-# 【新增】接口 0：智能记账解析 (解决你之前的报错)
+# 路由 1：AI 智能记账解析 (分类 + 双摘要)
 # ==========================================
 class LedgerRequest(BaseModel):
     text: str
@@ -38,51 +41,60 @@ class LedgerRequest(BaseModel):
 @app.post("/ledger_ai")
 async def ledger_ai(req: LedgerRequest):
     try:
-        # 这个 Prompt 是专门为你前端那种“分类显示+详情展开”设计的
         prompt = f"""
-        Act as a professional personal accountant. 
-        Analyze this spending description: "{req.text}"
+        Role: Senior Personal Wealth Accountant.
+        Context: The user input is: "{req.text}"
         
-        Output format: Category|Short_Summary|Detailed_Explanation|Amount_Number
+        Task:
+        1. Classify the spending (e.g., Food, Travel, Tech, Living, Investment, Entertainment).
+        2. Short_Summary: A punchy 5-8 word summary for a list view.
+        3. Detailed_Explanation: A professional 2-sentence financial narrative.
+        4. Amount: Extract numbers only. Assume USD if not specified.
         
-        Requirements:
-        1. Category: One word (e.g., Food, Transport, Tech, Entertainment).
-        2. Short_Summary: Max 8 words for the list view.
-        3. Detailed_Explanation: 2 professional sentences for the expanded view.
-        4. Amount_Number: Extract only the number. Default to 0 if not found.
-        
-        Example: "Spent 50 bucks on a nice steak dinner" -> Food|Steak Dinner|A high-quality dining expense for personal nutrition and leisure.|50
+        OUTPUT FORMAT (Strictly Pipe-separated):
+        Category|Short_Summary|Detailed_Explanation|Amount_Number
         """
         response = model.generate_content(prompt)
         return {"data": response.text}
     except Exception as e:
-        return {"data": f"Misc|Error|Processing failed: {str(e)}|0"}
+        return {"data": f"Misc|Processing Error|Failed to analyze: {str(e)}|0"}
+
 
 # ==========================================
-# 接口 1：AI 简历审核 (对应 screen_resume_v2)
+# 路由 2：AI 简历审核 & 兼职资格拦截
 # ==========================================
 @app.post("/screen_resume_v2")
 async def screen_resume_v2(job_description: str = Form(...), resume_file: UploadFile = File(...)):
     try:
         pdf_bytes = await resume_file.read()
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
-        resume_text = ""
-        for page in pdf_reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                resume_text += extracted + "\n"
+        resume_text = "\n".join([p.extract_text() for p in pdf_reader.pages if p.extract_text()])
 
         if not resume_text.strip():
-            return {"review_result": "[FAIL] 无法读取 PDF 内容。"}
+            return {"review_result": "[FAIL] System: Could not extract text from PDF."}
 
-        prompt = f"Role: Elite HR. Evaluate JD: {job_description} with Resume: {resume_text}. If skill check, start with [PASS] or [FAIL]."
+        prompt = f"""
+        ROLE: Ruthless Technical HR & Hiring Manager.
+        EVALUATE:
+        Job Description: {job_description}
+        Candidate Resume: {resume_text}
+        
+        STRICT INSTRUCTION:
+        If JD asks for eligibility (Gig Check), start with EXACTLY [PASS] or [FAIL].
+        Then provide:
+        1. Match Score (0-100%).
+        2. Core Strengths.
+        3. Critical Weaknesses.
+        4. 3 Hard-core technical interview questions.
+        """
         response = model.generate_content(prompt)
         return {"review_result": response.text}
     except Exception as e:
-        return {"review_result": f"Error: {str(e)}"}
+        return {"review_result": f"[FAIL] Server Error: {str(e)}"}
+
 
 # ==========================================
-# 接口 2：财报追问对话 (对应 finance_chat)
+# 路由 3：财报追问对话 (CFO 模式)
 # ==========================================
 class FinanceChatRequest(BaseModel):
     history: str
@@ -92,28 +104,49 @@ class FinanceChatRequest(BaseModel):
 async def finance_chat(req: FinanceChatRequest):
     try:
         prompt = f"""
-        You are a Wall Street CFO. The user is generating a {req.report_type} Financial Report.
-        History: {req.history}
-        Task: Ask ONE sharp question to get missing info. End with [PROGRESS: X/5]. If ready, reply ONLY [READY].
+        You are a Wall Street CFO. Creating a {req.report_type} Financial Report.
+        HISTORY: {req.history}
+        
+        TASK:
+        1. Analyze if more data is needed for a 1500-word deep report.
+        2. If missing info, ask ONE sharp question. Append [PROGRESS: X/5] at the end.
+        3. If data is exhaustive, reply with ONLY the word: [READY]
         """
         response = model.generate_content(prompt)
         return {"reply": response.text}
     except Exception as e:
-        return {"reply": f"Error: {str(e)}"}
+        return {"reply": f"CFO Connection Lost: {str(e)}"}
+
 
 # ==========================================
-# 接口 3：长篇专业财报生成 (对应 finance_report)
+# 路由 4：长篇专业财报生成 (1500字极致版)
 # ==========================================
 @app.post("/finance_report")
 async def finance_report(req: FinanceChatRequest):
     try:
-        prompt = f"Role: Top CFO. Based on: {req.history}, generate an exhaustive 1500-word {req.report_type} Report. Use ALL-CAPS headers."
+        prompt = f"""
+        You are a Top-tier Senior Auditor.
+        Based on: {req.history}
+        
+        GENERATE A MASTERPIECE {req.report_type} FINANCIAL REPORT.
+        
+        STANDARDS:
+        - Use US GAAP/SEC standards.
+        - Include metrics: EBITDA, YoY/QoQ Growth, Free Cash Flow, CapEx, Burning Rate.
+        - Length: MUST be exhaustive and detailed (aim for 1500+ words).
+        - Format: Use ALL-CAPS headers, bullet points, NO markdown code blocks.
+        """
+        # 2.5 Flash 的生成上限很高，可以轻松处理长文
         response = model.generate_content(prompt, generation_config={"max_output_tokens": 4096})
         return {"report": response.text}
     except Exception as e:
         return {"report": f"Gen Error: {str(e)}"}
 
+
+# ==========================================
 # 启动
+# ==========================================
 if __name__ == "__main__":
+    # Render 会自动注入 PORT 环境变量
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
